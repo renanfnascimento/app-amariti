@@ -4,6 +4,7 @@ import json
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 
 # Configuração da página - layout wide
 st.set_page_config(page_title="Jodda.ia | Dashboard de Vendas", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
@@ -11,7 +12,6 @@ st.set_page_config(page_title="Jodda.ia | Dashboard de Vendas", page_icon="🚀"
 # --- CSS INSPIRADO NO JODDA.IA ---
 st.markdown("""
 <style>
-    /* Cores padrão do Jodda.ia */
     :root {
         --primary-color: #3c6fff;
         --text-color: #1a1d1f;
@@ -21,20 +21,14 @@ st.markdown("""
         --border-color: #efefef;
         --accent-green: #83bf6e;
     }
-
-    /* Fundo da tela inteira e Esconder Menu Padrão do Streamlit */
     .stApp { background-color: var(--bg-light); }
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
-
-    /* Estilo da Sidebar (Menu Lateral) */
     [data-testid="stSidebar"] {
         background-color: var(--white);
         border-right: 1px solid var(--border-color);
         box-shadow: 2px 0 10px rgba(0,0,0,0.02);
     }
-    
-    /* Estilo dos Cartões de Métricas (Brancos, sombra leve, ícones azuis) */
     div[data-testid="stMetric"] {
         background-color: var(--white);
         border: 1px solid var(--border-color);
@@ -42,26 +36,18 @@ st.markdown("""
         padding: 24px;
         box-shadow: 0px 2px 10px rgba(0, 0, 0, 0.05);
     }
-    
-    /* Cor e tamanho dos Valores ($) */
     div[data-testid="stMetricValue"] {
         color: var(--text-color);
         font-size: 32px !important;
         font-weight: 700;
         margin-top: 10px;
     }
-    
-    /* Cor e tamanho dos Títulos dos cartões */
     div[data-testid="stMetricLabel"] {
         font-size: 15px !important;
         color: var(--text-light);
         font-weight: 600;
     }
-    
-    /* Deixar todos os textos com a fonte/cor do Jodda */
     h1, h2, h3, p, span { color: var(--text-color) !important; font-family: 'Inter', sans-serif; }
-    
-    /* Cards de gráficos */
     .element-container [data-testid="stPlotlyChart"] {
         background-color: var(--white);
         border-radius: 16px;
@@ -73,8 +59,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- FUNÇÃO PARA FORMATAR MOEDA ---
+def formata_moeda(valor):
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
 # --- CONEXÃO COM O GOOGLE ---
-@st.cache_data(ttl=60) # Cache para deixar o app rápido
+@st.cache_data(ttl=60)
 def load_data():
     try:
         credenciais_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
@@ -88,128 +78,118 @@ def load_data():
         
         if not df.empty:
             df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
-            
-            # Tratamento de colunas financeiras (Dividindo por 100 para acertar centavos)
             cols_fin = ['Faturamento Bruto', 'Lucro Liquido', 'Margem de Contribuição', 'Custos Venda (Produto+Taxa+Frete)', 'Custo Fixo Rateado', 'Custo ADS']
             for col in cols_fin:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
                     df[col] = df[col] / 100
-            
             df = df.sort_values('Data')
-        
         return df, True, ""
+    except Exception as e:
+        return pd.DataFrame(), False, str(e)
+
+# --- CONEXÃO COM O TINY ERP ---
+@st.cache_data(ttl=300) # Atualiza a cada 5 minutos
+def load_tiny_produtos():
+    token = st.secrets.get("TINY_TOKEN", "")
+    if not token:
+        return pd.DataFrame(), False, "Token não encontrado."
+    
+    url = "https://api.tiny.com.br/api2/produtos.pesquisa.php"
+    payload = {'token': token, 'formato': 'JSON'}
+    
+    try:
+        response = requests.post(url, data=payload)
+        data = response.json()
+        
+        if data['retorno']['status'] == 'OK':
+            produtos = data['retorno']['produtos']
+            lista = []
+            for p in produtos:
+                prod = p['produto']
+                lista.append({
+                    "SKU": prod.get('codigo', '-'),
+                    "Produto": prod.get('nome', 'Sem Nome'),
+                    "Preço de Venda": float(prod.get('preco', 0)),
+                    "Custo (Tiny)": float(prod.get('preco_custo', 0))
+                })
+            return pd.DataFrame(lista), True, ""
+        else:
+            return pd.DataFrame(), False, "Erro na API do Tiny: " + str(data['retorno'].get('erros', ''))
     except Exception as e:
         return pd.DataFrame(), False, str(e)
 
 df, conexao_ok, erro = load_data()
 
-# --- FUNÇÃO PARA FORMATAR MOEDA ---
-def formata_moeda(valor):
-    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-# --- SIDEBAR (MENU LATERAL ESTILO JODDA.IA) ---
+# --- SIDEBAR (MENU LATERAL) ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3214/3214746.png", width=50) # Logo provisória
+    st.image("https://cdn-icons-png.flaticon.com/512/3214/3214746.png", width=50)
     st.title("Amariti ERP")
     st.markdown("---")
-    
-    # Criando a navegação
-    menu_selecionado = st.radio(
-        "Menu Principal",
-        ["📊 Dashboard", "📦 Gestão de Produtos (Custos)", "👗 Controle de Produção", "⚙️ Configurações"],
-        label_visibility="collapsed"
-    )
-    
-    st.markdown("---")
-    st.info("💡 Fale com o suporte no WhatsApp")
+    menu_selecionado = st.radio("Menu Principal", ["📊 Dashboard", "📦 Gestão de Produtos (Custos)", "👗 Controle de Produção", "⚙️ Configurações"], label_visibility="collapsed")
 
-# --- LÓGICA DE NAVEGAÇÃO ENTRE PÁGINAS ---
-
-# PÁGINA 1: DASHBOARD FINANCEIRO (Como era antes, mas no estilo Jodda)
+# --- PÁGINA 1: DASHBOARD FINANCEIRO ---
 if menu_selecionado == "📊 Dashboard":
+    st.title("Dashboard Financeiro Amariti 👋")
     
-    st.title("Olá, Renan Ferreira do Nascimento 👋")
-    st.markdown("Bem-vindo ao seu **Dashboard de Vendas**.")
-    st.write("") 
-
-    if conexao_ok:
-        if not df.empty:
-            # 1. LINHA DE MÉTRICAS (CARTÕES JODDA)
-            total_faturado = df['Faturamento Bruto'].sum()
-            total_lucro = df['Lucro Liquido'].sum()
-            ticket_medio = df['Faturamento Bruto'].mean()
-            margem_percentual = (total_lucro / total_faturado) * 100 if total_faturado > 0 else 0
-            
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Faturamento Total", formata_moeda(total_faturado))
-            c2.metric("Total de Pedidos", f"{len(df)}")
-            c3.metric("Ticket Médio", formata_moeda(ticket_medio))
-            c4.metric("Margem de Lucro Bruto", f"{margem_percentual:.1f}%")
-            
-            # 2. SEÇÃO DE ADS
-            st.write("### 📢 Investimento em Anúncios (ADS)")
-            ca1, ca2 = st.columns(2)
-            ca1.metric("Custo Total ADS (Mês)", "R$ 0,00") # Vamos puxar isso no futuro
-            ca2.metric("Lucro Líquido Pós ADS", formata_moeda(total_lucro))
-            
-            # 3. GRÁFICO (LINHAS E BARRAS LIMPAS TIPO JODDA)
-            st.write("---")
-            st.subheader("Faturamento x Lucro Diário")
-            
-            df_dia = df.groupby('Data').agg({'Faturamento Bruto': 'sum', 'Lucro Liquido': 'sum'}).reset_index()
-            
-            fig = go.Figure()
-            # Faturamento em barras (Azul Jodda)
-            fig.add_trace(go.Bar(x=df_dia['Data'], y=df_dia['Faturamento Bruto'], name='Faturamento', marker_color='#e8efff', marker_line_width=0))
-            # Lucro em linha de destaque (Verde Jodda)
-            fig.add_trace(go.Scatter(x=df_dia['Data'], y=df_dia['Lucro Liquido'], name='Lucro Líquido', mode='lines+markers', line=dict(color='#83bf6e', width=4), marker=dict(size=8)))
-            
-            fig.update_layout(
-                plot_bgcolor='#ffffff',
-                paper_bgcolor='#ffffff',
-                hovermode="x unified",
-                xaxis=dict(showgrid=False),
-                yaxis=dict(showgrid=True, gridcolor='#efefef', gridwidth=1),
-                margin=dict(l=0, r=0, t=10, b=0),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        else:
-            st.warning("Nenhum dado encontrado no momento.")
+    if conexao_ok and not df.empty:
+        total_faturado = df['Faturamento Bruto'].sum()
+        total_lucro = df['Lucro Liquido'].sum()
+        ticket_medio = df['Faturamento Bruto'].mean()
+        margem_percentual = (total_lucro / total_faturado) * 100 if total_faturado > 0 else 0
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Faturamento Total", formata_moeda(total_faturado))
+        c2.metric("Total de Pedidos", f"{len(df)}")
+        c3.metric("Ticket Médio", formata_moeda(ticket_medio))
+        c4.metric("Margem de Lucro", f"{margem_percentual:.1f}%")
+        
+        st.write("---")
+        st.subheader("Faturamento x Lucro Diário")
+        df_dia = df.groupby('Data').agg({'Faturamento Bruto': 'sum', 'Lucro Liquido': 'sum'}).reset_index()
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=df_dia['Data'], y=df_dia['Faturamento Bruto'], name='Faturamento', marker_color='#e8efff', marker_line_width=0))
+        fig.add_trace(go.Scatter(x=df_dia['Data'], y=df_dia['Lucro Liquido'], name='Lucro Líquido', mode='lines+markers', line=dict(color='#83bf6e', width=4), marker=dict(size=8)))
+        fig.update_layout(plot_bgcolor='#ffffff', paper_bgcolor='#ffffff', hovermode="x unified", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#efefef'), margin=dict(l=0, r=0, t=10, b=0))
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.error(f"🔴 Erro de Conexão: {erro}")
+        st.warning("Sem dados financeiros ou erro de conexão.")
 
-
-# PÁGINA 2: GESTÃO DE PRODUTOS E CUSTOS (O QUE VOCÊ PEDIU AGORA!)
+# --- PÁGINA 2: GESTÃO DE PRODUTOS E CUSTOS ---
 elif menu_selecionado == "📦 Gestão de Produtos (Custos)":
-    st.title("📦 Gestão de Produtos e Custos")
-    st.markdown("Aqui você cadastra o Custo de Produção (Tecido, aviamentos, mão de obra) de cada produto para calcularmos o **Lucro Real**.")
+    st.title("📦 Catálogo e Custos (Ao Vivo do Tiny)")
+    st.markdown("Estes produtos estão sendo **puxados agora mesmo** direto do seu Tiny ERP.")
     
-    st.info("💡 Em breve: Nesta tela, o sistema vai ler os produtos vendidos na aba 'BD_Financeiro' e pedir para você preencher o custo de cada um deles. Quando você salvar, o aplicativo vai descontar esse custo automaticamente do Faturamento do Dashboard.")
-    
-    # Criando uma tabela falsa por enquanto só para você ver o visual
-    st.write("### Produtos com Custos a Definir")
-    
-    df_exemplo = pd.DataFrame({
-        "SKU": ["AMR-VEST-PRETO", "AMR-SAIA-CURTA", "AMR-BLUSA-TRICOT"],
-        "Produto": ["Vestido Longo Preto Amariti", "Saia Curta Amariti", "Blusa de Tricot Gola V"],
-        "Faturamento Bruto (Ref)": ["R$ 159,90", "R$ 89,90", "R$ 120,00"],
-        "Custo Cadastrado": ["❌ Sem Custo", "❌ Sem Custo", "❌ Sem Custo"]
-    })
-    
-    st.dataframe(df_exemplo, use_container_width=True, hide_index=True)
-    
-    st.button("Cadastrar Novo Custo de Produto", type="primary")
+    with st.spinner("Conectando ao Tiny ERP para buscar seu estoque..."):
+        df_tiny, tiny_ok, erro_tiny = load_tiny_produtos()
+        
+    if tiny_ok and not df_tiny.empty:
+        # Formata para dinheiro na hora de mostrar na tela
+        df_mostrar = df_tiny.copy()
+        df_mostrar['Preço de Venda'] = df_mostrar['Preço de Venda'].apply(formata_moeda)
+        df_mostrar['Custo (Tiny)'] = df_mostrar['Custo (Tiny)'].apply(formata_moeda)
+        
+        # Mostra KPIs rápidos do catálogo
+        col1, col2 = st.columns(2)
+        col1.metric("📦 Total de Produtos no Tiny", f"{len(df_tiny)} SKUs")
+        
+        # Quantos produtos estão com custo zerado?
+        produtos_sem_custo = len(df_tiny[df_tiny['Custo (Tiny)'] == 0])
+        if produtos_sem_custo > 0:
+            col2.error(f"⚠️ Atenção: {produtos_sem_custo} produtos estão com custo ZERO no Tiny!")
+        else:
+            col2.success("✅ Todos os produtos possuem custo cadastrado!")
+        
+        st.write("---")
+        st.write("### Lista de Produtos Cadastrados")
+        st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+    else:
+        st.error(f"🔴 Não consegui carregar os produtos do Tiny. Erro: {erro_tiny}")
 
-
-# PÁGINA 3 E 4: PLACEHOLDERS
 elif menu_selecionado == "👗 Controle de Produção":
     st.title("👗 Controle de Produção (PCP)")
-    st.markdown("Aqui será a tela da sua **Fábrica**.")
-    st.info("A costureira poderá clicar em um botão para dar baixa nas peças que ela costurou hoje, gerando um histórico de produtividade.")
+    st.info("Aqui será a tela da sua Fábrica. Ficará pronta no próximo passo!")
 
 elif menu_selecionado == "⚙️ Configurações":
     st.title("⚙️ Configurações")
-    st.markdown("Ajustes de Impostos, Custos Fixos Mensais (Aluguel, Luz, etc) e Conexões (Mercado Livre e Shopee).")
+    st.info("Ajustes gerais.")
