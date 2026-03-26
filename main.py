@@ -164,32 +164,37 @@ elif menu_selecionado == "📦 Gestão de Produtos (Custos)":
         df_tiny, tiny_ok, erro_tiny = load_tiny_produtos()
         
     if tiny_ok and not df_tiny.empty:
-        # Formata para dinheiro na hora de mostrar na tela
-        df_mostrar = df_tiny.copy()
-        df_mostrar['Preço de Venda'] = df_mostrar['Preço de Venda'].apply(formata_moeda)
-        df_mostrar['Custo (Tiny)'] = df_mostrar['Custo (Tiny)'].apply(formata_moeda)
+        # Conta os zerados
+        produtos_sem_custo = len(df_tiny[df_tiny['Custo (Tiny)'] == 0])
         
         # Mostra KPIs rápidos do catálogo
         col1, col2 = st.columns(2)
         col1.metric("📦 Total de Produtos no Tiny", f"{len(df_tiny)} SKUs")
         
-        # Quantos produtos estão com custo zerado?
-        produtos_sem_custo = len(df_tiny[df_tiny['Custo (Tiny)'] == 0])
         if produtos_sem_custo > 0:
             col2.error(f"⚠️ Atenção: {produtos_sem_custo} produtos estão com custo ZERO no Tiny!")
         else:
             col2.success("✅ Todos os produtos possuem custo cadastrado!")
-        
+            
         st.write("---")
-        st.write("### Lista de Produtos Cadastrados")
+        
+        # O BOTÃO MÁGICO DE FILTRO
+        c1, c2 = st.columns([1, 3])
+        with c1:
+            mostrar_zerados = st.toggle("🚨 Mostrar apenas produtos SEM CUSTO", value=True if produtos_sem_custo > 0 else False)
+        
+        # Filtra os dados se o botão estiver ativado
+        df_mostrar = df_tiny.copy()
+        if mostrar_zerados:
+            df_mostrar = df_mostrar[df_mostrar['Custo (Tiny)'] == 0]
+            st.warning("Exibindo apenas os produtos que precisam de atualização de custo urgente no Tiny.")
+            
+        # Formata para dinheiro na hora de mostrar na tela
+        df_mostrar['Preço de Venda'] = df_mostrar['Preço de Venda'].apply(formata_moeda)
+        df_mostrar['Custo (Tiny)'] = df_mostrar['Custo (Tiny)'].apply(formata_moeda)
+        
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+        
+        st.info("💡 Como arrumar: Abra o seu Tiny ERP, procure os SKUs listados acima e preencha o 'Preço de Custo'. Assim que salvar lá, atualize esta página e eles sumirão da lista de alertas!")
     else:
         st.error(f"🔴 Não consegui carregar os produtos do Tiny. Erro: {erro_tiny}")
-
-elif menu_selecionado == "👗 Controle de Produção":
-    st.title("👗 Controle de Produção (PCP)")
-    st.info("Aqui será a tela da sua Fábrica. Ficará pronta no próximo passo!")
-
-elif menu_selecionado == "⚙️ Configurações":
-    st.title("⚙️ Configurações")
-    st.info("Ajustes gerais.")
