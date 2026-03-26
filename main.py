@@ -20,13 +20,22 @@ try:
     
     # Tratamento de Dados (Convertendo números e datas)
     if not df.empty:
-        # Tenta converter a coluna Data
         df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
-        # Garante que as colunas financeiras sejam números
-        cols_fin = ['Faturamento Bruto', 'Lucro Liquido', 'Margem de Contribuição']
+        
+        # Colunas de Dinheiro da Amariti
+        cols_fin = [
+            'Faturamento Bruto', 
+            'Lucro Liquido', 
+            'Margem de Contribuição', 
+            'Custos Venda (Produto+Taxa+Frete)', 
+            'Custo Fixo Rateado'
+        ]
+        
         for col in cols_fin:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                # Transforma em número e DIVIDE POR 100 para colocar a vírgula no lugar certo!
+                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
+                df[col] = df[col] / 100
         
         df = df.sort_values('Data')
     
@@ -50,11 +59,14 @@ if conexao_ok:
             total_lucro = df['Lucro Liquido'].sum()
             ticket_medio = df['Faturamento Bruto'].mean()
             
+            # Função para formatar o dinheiro no padrão R$ Brasileiro
+            def formata_moeda(valor):
+                return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            
             c1, c2, c3 = st.columns(3)
-            # Formatação para Moeda Brasileira (R$)
-            c1.metric("Faturamento Bruto Total", f"R$ {total_faturado:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-            c2.metric("Lucro Líquido Total", f"R$ {total_lucro:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
-            c3.metric("Ticket Médio", f"R$ {ticket_medio:,.2f}".replace(",", "v").replace(".", ",").replace("v", "."))
+            c1.metric("Faturamento Bruto Total", formata_moeda(total_faturado))
+            c2.metric("Lucro Líquido Total", formata_moeda(total_lucro))
+            c3.metric("Ticket Médio", formata_moeda(ticket_medio))
             
             st.divider()
 
@@ -63,13 +75,18 @@ if conexao_ok:
             df_dia = df.groupby('Data')['Faturamento Bruto'].sum().reset_index()
             fig = px.bar(df_dia, x='Data', y='Faturamento Bruto', 
                          title="Faturamento Bruto por Dia",
-                         labels={'Faturamento Bruto': 'Valor (R$)', 'Data': 'Dia'},
+                         labels={'Faturamento Bruto': 'Valor (R$)', 'Data': 'Data da Venda'},
+                         text_auto='.2f', # Mostra o valor em cima da barra
                          color_discrete_sequence=['#00CC96'])
             st.plotly_chart(fig, use_container_width=True)
 
             # 3. TABELA DE DETALHES
             with st.expander("🔍 Ver Detalhes de Todos os Registros"):
-                st.dataframe(df, use_container_width=True)
+                # Formata a tabela para ficar bonita
+                df_mostrar = df.copy()
+                # Transforma a data de volta pro formato Brasileiro na hora de exibir
+                df_mostrar['Data'] = df_mostrar['Data'].dt.strftime('%d/%m/%Y')
+                st.dataframe(df_mostrar, use_container_width=True)
         else:
             st.warning("A aba 'BD_Financeiro' está vazia. Comece a vender para ver os gráficos!")
 
@@ -78,3 +95,6 @@ else:
 
 with aba2:
     st.info("Aqui entrará o controle de produção das costureiras.")
+
+with aba3:
+    st.info("Aqui você poderá cadastrar os custos fixos e impostos.")
