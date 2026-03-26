@@ -6,20 +6,20 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 
-# Configuração da página - layout wide
-st.set_page_config(page_title="Jodda.ia | Dashboard de Vendas", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Dashboard | Margem de Contribuição", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
 
-# --- CSS INSPIRADO NO JODDA.IA ---
+# --- CSS INSPIRADO NO JODDA.IA / TINY ---
 st.markdown("""
 <style>
     :root {
         --primary-color: #3c6fff;
         --text-color: #1a1d1f;
         --text-light: #6f767e;
-        --bg-light: #f8faff;
+        --bg-light: #f4f5f8;
         --white: #fff;
-        --border-color: #efefef;
-        --accent-green: #83bf6e;
+        --border-color: #e3e5e8;
+        --accent-green: #2ca01c;
+        --accent-red: #dc3545;
     }
     .stApp { background-color: var(--bg-light); }
     #MainMenu {visibility: hidden;}
@@ -27,43 +27,37 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background-color: var(--white);
         border-right: 1px solid var(--border-color);
-        box-shadow: 2px 0 10px rgba(0,0,0,0.02);
     }
-    div[data-testid="stMetric"] {
+    .tiny-card {
         background-color: var(--white);
         border: 1px solid var(--border-color);
-        border-radius: 16px;
-        padding: 24px;
-        box-shadow: 0px 2px 10px rgba(0, 0, 0, 0.05);
-    }
-    div[data-testid="stMetricValue"] {
-        color: var(--text-color);
-        font-size: 32px !important;
-        font-weight: 700;
-        margin-top: 10px;
-    }
-    div[data-testid="stMetricLabel"] {
-        font-size: 15px !important;
-        color: var(--text-light);
-        font-weight: 600;
-    }
-    h1, h2, h3, p, span { color: var(--text-color) !important; font-family: 'Inter', sans-serif; }
-    .element-container [data-testid="stPlotlyChart"] {
-        background-color: var(--white);
-        border-radius: 16px;
-        border: 1px solid var(--border-color);
-        box-shadow: 0px 2px 10px rgba(0, 0, 0, 0.05);
+        border-radius: 8px;
         padding: 20px;
-        margin-top: 20px;
+        box-shadow: 0px 2px 5px rgba(0, 0, 0, 0.02);
+        margin-bottom: 20px;
     }
+    .tiny-row {
+        display: flex; 
+        justify-content: space-between; 
+        border-bottom: 1px solid var(--border-color); 
+        padding: 10px 0;
+        font-size: 14px;
+        color: var(--text-color);
+    }
+    .tiny-row:last-child { border-bottom: none; }
+    .tiny-bold { font-weight: 600; }
+    .tiny-green { color: var(--accent-green); font-weight: 600; }
+    .tiny-red { color: var(--accent-red); }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNÇÃO PARA FORMATAR MOEDA ---
 def formata_moeda(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- CONEXÃO COM O GOOGLE ---
+def formata_perc(valor):
+    return f"{valor:,.2f}%".replace(".", ",")
+
+# --- CONEXÕES DE DADOS ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
@@ -72,183 +66,167 @@ def load_data():
         ID_DA_PLANILHA = "1HaqFImRnQgIrL-6BlnsifIyUwSVRngaUujQAsqTKOZY"
         planilha = gc.open_by_key(ID_DA_PLANILHA)
         
-        # 1. Puxando a aba do Financeiro Geral
+        # Financeiro Geral (Fretes e Comissões)
         aba_fin = planilha.worksheet("BD_Financeiro")
         df_fin = pd.DataFrame(aba_fin.get_all_records())
         if not df_fin.empty:
             df_fin['Data'] = pd.to_datetime(df_fin['Data'], dayfirst=True, errors='coerce')
-            cols_fin = ['Faturamento Bruto', 'Lucro Liquido', 'Margem de Contribuição', 'Custos Venda (Produto+Taxa+Frete)', 'Custo Fixo Rateado', 'Custo ADS']
+            cols_fin = ['Faturamento Bruto', 'Custos Venda (Produto+Taxa+Frete)']
             for col in cols_fin:
                 if col in df_fin.columns:
                     df_fin[col] = pd.to_numeric(df_fin[col].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
                     df_fin[col] = df_fin[col] / 100
-            df_fin = df_fin.sort_values('Data')
-
-        # 2. Puxando a nova aba de Itens Vendidos
+                    
+        # Itens Vendidos (Para produtos e pedidos)
         try:
             aba_itens = planilha.worksheet("BD_Itens")
             df_itens = pd.DataFrame(aba_itens.get_all_records())
             if not df_itens.empty:
-                # Tratando os números de quantidade e preço
+                df_itens['Data'] = pd.to_datetime(df_itens['Data'], dayfirst=True, errors='coerce')
                 df_itens['Quantidade'] = pd.to_numeric(df_itens.get('Quantidade', 0), errors='coerce').fillna(0)
                 df_itens['Preco_Unitario'] = pd.to_numeric(df_itens.get('Preco_Unitario', 0).astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
-        except Exception as e:
-            df_itens = pd.DataFrame() # Se a aba estiver vazia ou com erro, cria tabela em branco
+        except Exception:
+            df_itens = pd.DataFrame()
             
         return df_fin, df_itens, True, ""
     except Exception as e:
         return pd.DataFrame(), pd.DataFrame(), False, str(e)
 
-# --- CONEXÃO COM O TINY ERP ---
 @st.cache_data(ttl=300)
 def load_tiny_produtos():
     token = st.secrets.get("TINY_TOKEN", "")
-    if not token:
-        return pd.DataFrame(), False, "Token não encontrado."
+    if not token: return pd.DataFrame(), False, "Token não encontrado."
     
     url = "https://api.tiny.com.br/api2/produtos.pesquisa.php"
     payload = {'token': token, 'formato': 'JSON'}
-    
     try:
         response = requests.post(url, data=payload)
         data = response.json()
-        
         if data['retorno']['status'] == 'OK':
             produtos = data['retorno']['produtos']
-            lista = []
-            for p in produtos:
-                prod = p['produto']
-                lista.append({
-                    "SKU": str(prod.get('codigo', '-')), # Força ser texto para não dar erro
-                    "Produto": prod.get('nome', 'Sem Nome'),
-                    "Preço de Venda": float(prod.get('preco', 0)),
-                    "Custo (Tiny)": float(prod.get('preco_custo', 0))
-                })
+            lista = [{"SKU": str(p['produto'].get('codigo', '-')), "Custo (Tiny)": float(p['produto'].get('preco_custo', 0))} for p in produtos]
             return pd.DataFrame(lista), True, ""
-        else:
-            return pd.DataFrame(), False, "Erro na API do Tiny: " + str(data['retorno'].get('erros', ''))
+        return pd.DataFrame(), False, "Erro na API"
     except Exception as e:
         return pd.DataFrame(), False, str(e)
 
-# Carregando as três fontes de dados
 df_fin, df_itens, conexao_ok, erro = load_data()
 df_tiny, tiny_ok, erro_tiny = load_tiny_produtos()
 
-# --- SIDEBAR (MENU LATERAL) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3214/3214746.png", width=50)
     st.title("Amariti ERP")
     st.markdown("---")
-    menu_selecionado = st.radio("Menu Principal", ["📊 Dashboard", "📦 Gestão de Produtos (Custos)", "👗 Controle de Produção", "⚙️ Configurações"], label_visibility="collapsed")
+    menu_selecionado = st.radio("Menu Principal", ["📊 Margem de Contribuição", "📦 Produtos e Custos"], label_visibility="collapsed")
 
-# --- PÁGINA 1: DASHBOARD FINANCEIRO ---
-if menu_selecionado == "📊 Dashboard":
-    st.title("Dashboard Financeiro Amariti 👋")
+# --- PÁGINA 1: MARGEM DE CONTRIBUIÇÃO (ESTILO TINY) ---
+if menu_selecionado == "📊 Margem de Contribuição":
+    st.title("Margem de Contribuição")
     
-    if conexao_ok and not df_fin.empty:
-        total_faturado = df_fin['Faturamento Bruto'].sum()
-        total_lucro = df_fin['Lucro Liquido'].sum()
-        ticket_medio = df_fin['Faturamento Bruto'].mean()
-        margem_percentual = (total_lucro / total_faturado) * 100 if total_faturado > 0 else 0
+    if conexao_ok and not df_fin.empty and not df_itens.empty and tiny_ok:
         
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Faturamento Total", formata_moeda(total_faturado))
-        c2.metric("Total de Pedidos", f"{len(df_fin)}")
-        c3.metric("Ticket Médio", formata_moeda(ticket_medio))
-        c4.metric("Margem de Lucro", f"{margem_percentual:.1f}%")
+        # PREPARANDO OS DADOS
+        df_itens['SKU'] = df_itens['SKU'].astype(str)
+        df_tiny['SKU'] = df_tiny['SKU'].astype(str)
+        df_merged = pd.merge(df_itens, df_tiny, on="SKU", how="left")
+        df_merged['Custo (Tiny)'] = df_merged['Custo (Tiny)'].fillna(0)
         
-        st.write("---")
+        df_merged['Faturamento_Item'] = df_merged['Quantidade'] * df_merged['Preco_Unitario']
+        df_merged['Custo_Total_Item'] = df_merged['Quantidade'] * df_merged['Custo (Tiny)']
         
-        # --- A MÁGICA DO JODDA ACONTECE AQUI: CURVA ABC ---
-        st.subheader("🏆 Top Produtos - Mais Lucrativos (Curva A)")
-        st.markdown("Veja exatamente quais peças estão a colocar mais dinheiro no caixa da Amariti, já descontando o custo de produção de cada uma.")
+        # MATEMÁTICA DA VISÃO GERAL
+        fat_total = df_fin['Faturamento Bruto'].sum()
+        custos_venda = df_fin['Custos Venda (Produto+Taxa+Frete)'].sum() # No momento o n8n agrupa frete e comissão aqui
+        custos_compras = df_merged['Custo_Total_Item'].sum()
         
-        if not df_itens.empty and tiny_ok and not df_tiny.empty:
-            # Transforma o SKU em texto nas duas planilhas para o casamento não falhar
-            df_itens['SKU'] = df_itens['SKU'].astype(str)
-            df_tiny['SKU'] = df_tiny['SKU'].astype(str)
-            
-            # Cruzando as vendas com os custos do Tiny (Match pelo SKU)
-            df_merged = pd.merge(df_itens, df_tiny, on="SKU", how="left")
-            
-            # Produtos que não foram encontrados no Tiny ficam com custo 0
-            df_merged['Custo (Tiny)'] = df_merged['Custo (Tiny)'].fillna(0)
-            df_merged['Produto'] = df_merged['Produto_x'].fillna("Sem Nome")
-            
-            # A Matemática!
-            df_merged['Faturamento_Item'] = df_merged['Quantidade'] * df_merged['Preco_Unitario']
-            df_merged['Custo_Total_Item'] = df_merged['Quantidade'] * df_merged['Custo (Tiny)']
-            df_merged['Lucro_Bruto_Item'] = df_merged['Faturamento_Item'] - df_merged['Custo_Total_Item']
-            
-            # Agrupando todos os SKUs iguais para ver o lucro total de cada modelo
-            df_abc = df_merged.groupby(['SKU', 'Produto']).agg({
-                'Quantidade': 'sum',
-                'Faturamento_Item': 'sum',
-                'Lucro_Bruto_Item': 'sum'
-            }).reset_index()
-            
-            # Ordenando do que dá mais lucro para o que dá menos
-            df_abc = df_abc.sort_values(by='Lucro_Bruto_Item', ascending=False)
-            
-            # Embelezando a tabela para a tela
-            df_abc_view = df_abc.copy()
-            df_abc_view = df_abc_view.rename(columns={'Quantidade': 'Qtd Vendida', 'Faturamento_Item': 'Faturamento Total', 'Lucro_Bruto_Item': 'Lucro Bruto (Fat - Custo)'})
-            df_abc_view['Faturamento Total'] = df_abc_view['Faturamento Total'].apply(formata_moeda)
-            df_abc_view['Lucro Bruto (Fat - Custo)'] = df_abc_view['Lucro Bruto (Fat - Custo)'].apply(formata_moeda)
-            
-            # Mostra apenas os 10 mais vendidos/lucrativos na tela inicial
-            st.dataframe(df_abc_view.head(10), use_container_width=True, hide_index=True)
-            
-        else:
-            st.info("💡 À espera que o seu n8n envie os primeiros produtos para a aba 'BD_Itens' para podermos gerar a tabela de Lucro por Produto!")
+        margem_contribuicao = fat_total - custos_venda - custos_compras
+        indice_total = (margem_contribuicao / fat_total * 100) if fat_total > 0 else 0
         
-        st.write("---")
-        st.subheader("Faturamento x Lucro Diário")
-        df_dia = df_fin.groupby('Data').agg({'Faturamento Bruto': 'sum', 'Lucro Liquido': 'sum'}).reset_index()
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_dia['Data'], y=df_dia['Faturamento Bruto'], name='Faturamento', marker_color='#e8efff', marker_line_width=0))
-        fig.add_trace(go.Scatter(x=df_dia['Data'], y=df_dia['Lucro Liquido'], name='Lucro Líquido', mode='lines+markers', line=dict(color='#83bf6e', width=4), marker=dict(size=8)))
-        fig.update_layout(plot_bgcolor='#ffffff', paper_bgcolor='#ffffff', hovermode="x unified", xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#efefef'), margin=dict(l=0, r=0, t=10, b=0))
-        st.plotly_chart(fig, use_container_width=True)
+        # 1. BLOCO VISÃO GERAL
+        st.subheader("Visão geral")
+        st.markdown(f"""
+        <div class="tiny-card">
+            <div class="tiny-row"><span>(+) Faturamento</span> <span class="tiny-bold">{formata_moeda(fat_total)}</span></div>
+            <div class="tiny-row tiny-red"><span>(-) Custos de Venda (Fretes e Comissões)</span> <span>{formata_moeda(custos_venda)}</span></div>
+            <div class="tiny-row tiny-red"><span>(-) Custos de compras (Custo Produção)</span> <span>{formata_moeda(custos_compras)}</span></div>
+            <div class="tiny-row" style="margin-top: 10px; font-size: 16px;">
+                <span class="tiny-bold">Margem de contribuição</span> 
+                <span class="tiny-green">{formata_moeda(margem_contribuicao)}</span>
+            </div>
+            <div class="tiny-row" style="font-size: 16px;">
+                <span class="tiny-bold">Índice total da margem</span> 
+                <span class="tiny-bold">{formata_perc(indice_total)}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 2. BLOCO CANAIS DE VENDA
+        st.subheader("Canais de venda")
+        # Pega faturamento e custo de venda por canal
+        df_canais_fin = df_fin.groupby('Canal').agg({'Faturamento Bruto': 'sum', 'Custos Venda (Produto+Taxa+Frete)': 'sum'}).reset_index()
+        # Pega custo de produto por canal
+        df_canais_itens = df_merged.groupby('Canal').agg({'Custo_Total_Item': 'sum'}).reset_index()
+        
+        df_canais = pd.merge(df_canais_fin, df_canais_itens, on='Canal', how='left').fillna(0)
+        df_canais['Margem'] = df_canais['Faturamento Bruto'] - df_canais['Custos Venda (Produto+Taxa+Frete)'] - df_canais['Custo_Total_Item']
+        df_canais['Índice'] = (df_canais['Margem'] / df_canais['Faturamento Bruto']) * 100
+        
+        df_canais_view = df_canais[['Canal', 'Faturamento Bruto', 'Margem', 'Índice']].copy()
+        df_canais_view = df_canais_view.rename(columns={'Faturamento Bruto': 'Faturado', 'Índice': 'Índice (%)'})
+        df_canais_view['Faturado'] = df_canais_view['Faturado'].apply(formata_moeda)
+        df_canais_view['Margem'] = df_canais_view['Margem'].apply(formata_moeda)
+        df_canais_view['Índice (%)'] = df_canais_view['Índice (%)'].apply(formata_perc)
+        
+        st.dataframe(df_canais_view, use_container_width=True, hide_index=True)
+        
+        # 3. BLOCO PRODUTOS
+        st.subheader("Produtos")
+        df_prods = df_merged.groupby('Produto').agg({'Numero_Pedido': 'nunique', 'Quantidade': 'sum', 'Faturamento_Item': 'sum', 'Custo_Total_Item': 'sum'}).reset_index()
+        df_prods['Margem'] = df_prods['Faturamento_Item'] - df_prods['Custo_Total_Item']
+        df_prods['Índice (%)'] = (df_prods['Margem'] / df_prods['Faturamento_Item']) * 100
+        
+        df_prods = df_prods.sort_values('Faturamento_Item', ascending=False)
+        df_prods_view = df_prods[['Produto', 'Numero_Pedido', 'Quantidade', 'Faturamento_Item', 'Índice (%)']].copy()
+        df_prods_view = df_prods_view.rename(columns={'Produto': 'Descrição', 'Numero_Pedido': 'Qtd. de vendas', 'Quantidade': 'Qtd. vendida', 'Faturamento_Item': 'Total faturado'})
+        df_prods_view['Total faturado'] = df_prods_view['Total faturado'].apply(formata_moeda)
+        df_prods_view['Índice (%)'] = df_prods_view['Índice (%)'].apply(formata_perc)
+        
+        st.dataframe(df_prods_view, use_container_width=True, hide_index=True)
+
+        # 4. BLOCO PEDIDOS DE VENDA
+        st.subheader("Pedidos de venda")
+        df_pedidos = df_merged.groupby(['Numero_Pedido', 'Data']).agg({'Quantidade': 'sum', 'Faturamento_Item': 'sum', 'Custo_Total_Item': 'sum'}).reset_index()
+        df_pedidos['Índice (%)'] = ((df_pedidos['Faturamento_Item'] - df_pedidos['Custo_Total_Item']) / df_pedidos['Faturamento_Item']) * 100
+        
+        df_pedidos = df_pedidos.sort_values('Data', ascending=False)
+        df_pedidos_view = df_pedidos[['Numero_Pedido', 'Data', 'Quantidade', 'Faturamento_Item', 'Índice (%)']].copy()
+        df_pedidos_view = df_pedidos_view.rename(columns={'Numero_Pedido': 'Nº Pedido', 'Quantidade': 'Qtd. de itens', 'Faturamento_Item': 'Total faturado'})
+        df_pedidos_view['Data'] = df_pedidos_view['Data'].dt.strftime('%d/%m/%Y')
+        df_pedidos_view['Total faturado'] = df_pedidos_view['Total faturado'].apply(formata_moeda)
+        df_pedidos_view['Índice (%)'] = df_pedidos_view['Índice (%)'].apply(formata_perc)
+        
+        st.dataframe(df_pedidos_view, use_container_width=True, hide_index=True)
+
     else:
-        st.warning("Sem dados financeiros ou erro de conexão.")
+        st.warning("À espera de dados na planilha ou configuração do Tiny.")
 
-# --- PÁGINA 2: GESTÃO DE PRODUTOS E CUSTOS ---
-elif menu_selecionado == "📦 Gestão de Produtos (Custos)":
-    st.title("📦 Catálogo e Custos (Ao Vivo do Tiny)")
-    st.markdown("Estes produtos estão a ser **puxados agora mesmo** direto do seu Tiny ERP.")
-    
+# --- PÁGINA 2: GESTÃO DE PRODUTOS ---
+elif menu_selecionado == "📦 Produtos e Custos":
+    st.title("📦 Produtos e Custos")
     if tiny_ok and not df_tiny.empty:
         produtos_sem_custo = len(df_tiny[df_tiny['Custo (Tiny)'] == 0])
         col1, col2 = st.columns(2)
-        col1.metric("📦 Total de Produtos no Tiny", f"{len(df_tiny)} SKUs")
-        
+        col1.metric("📦 Total de SKUs", f"{len(df_tiny)}")
         if produtos_sem_custo > 0:
-            col2.error(f"⚠️ Atenção: {produtos_sem_custo} produtos estão com custo ZERO no Tiny!")
+            col2.error(f"⚠️ {produtos_sem_custo} produtos com custo ZERO!")
         else:
-            col2.success("✅ Todos os produtos possuem custo cadastrado!")
+            col2.success("✅ Tudo com custo!")
             
-        st.write("---")
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            mostrar_zerados = st.toggle("🚨 Mostrar apenas produtos SEM CUSTO", value=True if produtos_sem_custo > 0 else False)
-        
+        mostrar_zerados = st.toggle("🚨 Mostrar apenas SEM CUSTO", value=True if produtos_sem_custo > 0 else False)
         df_mostrar = df_tiny.copy()
         if mostrar_zerados:
             df_mostrar = df_mostrar[df_mostrar['Custo (Tiny)'] == 0]
-            st.warning("A exibir apenas os produtos que precisam de atualização de custo urgente no Tiny.")
             
-        df_mostrar['Preço de Venda'] = df_mostrar['Preço de Venda'].apply(formata_moeda)
         df_mostrar['Custo (Tiny)'] = df_mostrar['Custo (Tiny)'].apply(formata_moeda)
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
-        st.info("💡 Como arranjar: Abra o seu Tiny ERP, procure os SKUs listados acima e preencha o 'Preço de Custo'. Assim que guardar lá, atualize esta página e eles sumirão da lista de alertas!")
-    else:
-        st.error(f"🔴 Não consegui carregar os produtos do Tiny. Erro: {erro_tiny}")
-
-elif menu_selecionado == "👗 Controle de Produção":
-    st.title("👗 Controle de Produção (PCP)")
-    st.info("Abaixo, ficará a tela para a sua equipa dar baixa na costura!")
-
-elif menu_selecionado == "⚙️ Configurações":
-    st.title("⚙️ Configurações")
-    st.info("Ajustes gerais e impostos.")
