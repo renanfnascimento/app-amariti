@@ -6,157 +6,210 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # Configuração da página - layout wide
-st.set_page_config(page_title="ERP Amariti", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Jodda.ia | Dashboard de Vendas", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
 
-# --- CSS INSPIRADO NO QUICKBOOKS ---
+# --- CSS INSPIRADO NO JODDA.IA ---
 st.markdown("""
 <style>
-    /* Fundo da tela inteira em um cinza super claro (padrão de dashboards) */
-    .stApp {
-        background-color: #F4F5F8;
+    /* Cores padrão do Jodda.ia */
+    :root {
+        --primary-color: #3c6fff;
+        --text-color: #1a1d1f;
+        --text-light: #6f767e;
+        --bg-light: #f8faff;
+        --white: #fff;
+        --border-color: #efefef;
+        --accent-green: #83bf6e;
+    }
+
+    /* Fundo da tela inteira e Esconder Menu Padrão do Streamlit */
+    .stApp { background-color: var(--bg-light); }
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+
+    /* Estilo da Sidebar (Menu Lateral) */
+    [data-testid="stSidebar"] {
+        background-color: var(--white);
+        border-right: 1px solid var(--border-color);
+        box-shadow: 2px 0 10px rgba(0,0,0,0.02);
     }
     
-    /* Estilo dos Cartões de Métricas (Brancos, sombra leve, topo verde) */
+    /* Estilo dos Cartões de Métricas (Brancos, sombra leve, ícones azuis) */
     div[data-testid="stMetric"] {
-        background-color: #FFFFFF;
-        border: 1px solid #E3E5E8;
-        border-radius: 8px;
-        padding: 20px;
-        box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.05);
-        border-top: 4px solid #2CA01C; /* Verde QuickBooks */
+        background-color: var(--white);
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0px 2px 10px rgba(0, 0, 0, 0.05);
     }
     
     /* Cor e tamanho dos Valores ($) */
     div[data-testid="stMetricValue"] {
-        color: #393A3D; /* Cinza escuro/Quase preto */
+        color: var(--text-color);
         font-size: 32px !important;
         font-weight: 700;
+        margin-top: 10px;
     }
     
     /* Cor e tamanho dos Títulos dos cartões */
     div[data-testid="stMetricLabel"] {
         font-size: 15px !important;
-        color: #6B6C72; /* Cinza médio */
+        color: var(--text-light);
         font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
     }
     
-    /* Ajustes para textos gerais ficarem escuros no fundo claro */
-    h1, h2, h3, p, span {
-        color: #393A3D !important;
+    /* Deixar todos os textos com a fonte/cor do Jodda */
+    h1, h2, h3, p, span { color: var(--text-color) !important; font-family: 'Inter', sans-serif; }
+    
+    /* Cards de gráficos */
+    .element-container [data-testid="stPlotlyChart"] {
+        background-color: var(--white);
+        border-radius: 16px;
+        border: 1px solid var(--border-color);
+        box-shadow: 0px 2px 10px rgba(0, 0, 0, 0.05);
+        padding: 20px;
+        margin-top: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- CONEXÃO COM O GOOGLE ---
-try:
-    credenciais_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-    gc = gspread.service_account_from_dict(credenciais_dict)
-    ID_DA_PLANILHA = "1HaqFImRnQgIrL-6BlnsifIyUwSVRngaUujQAsqTKOZY"
-    planilha = gc.open_by_key(ID_DA_PLANILHA)
-    aba_fin = planilha.worksheet("BD_Financeiro")
-    
-    dados = aba_fin.get_all_records()
-    df = pd.DataFrame(dados)
-    
-    if not df.empty:
-        df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
+@st.cache_data(ttl=60) # Cache para deixar o app rápido
+def load_data():
+    try:
+        credenciais_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+        gc = gspread.service_account_from_dict(credenciais_dict)
+        ID_DA_PLANILHA = "1HaqFImRnQgIrL-6BlnsifIyUwSVRngaUujQAsqTKOZY"
+        planilha = gc.open_by_key(ID_DA_PLANILHA)
+        aba_fin = planilha.worksheet("BD_Financeiro")
         
-        cols_fin = ['Faturamento Bruto', 'Lucro Liquido', 'Margem de Contribuição', 'Custos Venda (Produto+Taxa+Frete)', 'Custo Fixo Rateado', 'Custo ADS']
-        for col in cols_fin:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
-                df[col] = df[col] / 100
+        dados = aba_fin.get_all_records()
+        df = pd.DataFrame(dados)
         
-        df = df.sort_values('Data')
-    
-    conexao_ok = True
-except Exception as e:
-    conexao_ok = False
-    erro = str(e)
+        if not df.empty:
+            df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
+            
+            # Tratamento de colunas financeiras (Dividindo por 100 para acertar centavos)
+            cols_fin = ['Faturamento Bruto', 'Lucro Liquido', 'Margem de Contribuição', 'Custos Venda (Produto+Taxa+Frete)', 'Custo Fixo Rateado', 'Custo ADS']
+            for col in cols_fin:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
+                    df[col] = df[col] / 100
+            
+            df = df.sort_values('Data')
+        
+        return df, True, ""
+    except Exception as e:
+        return pd.DataFrame(), False, str(e)
+
+df, conexao_ok, erro = load_data()
 
 # --- FUNÇÃO PARA FORMATAR MOEDA ---
 def formata_moeda(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- INTERFACE DO APP ---
-st.title("Fluxo de Caixa - Amariti")
-st.markdown("Visão geral das finanças e performance de vendas.")
-st.write("") 
+# --- SIDEBAR (MENU LATERAL ESTILO JODDA.IA) ---
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/3214/3214746.png", width=50) # Logo provisória
+    st.title("Amariti ERP")
+    st.markdown("---")
+    
+    # Criando a navegação
+    menu_selecionado = st.radio(
+        "Menu Principal",
+        ["📊 Dashboard", "📦 Gestão de Produtos (Custos)", "👗 Controle de Produção", "⚙️ Configurações"],
+        label_visibility="collapsed"
+    )
+    
+    st.markdown("---")
+    st.info("💡 Fale com o suporte no WhatsApp")
 
-if conexao_ok:
-    aba1, aba2, aba3 = st.tabs(["📊 Visão Geral", "👗 Produção", "⚙️ Configurações"])
+# --- LÓGICA DE NAVEGAÇÃO ENTRE PÁGINAS ---
 
-    with aba1:
+# PÁGINA 1: DASHBOARD FINANCEIRO (Como era antes, mas no estilo Jodda)
+if menu_selecionado == "📊 Dashboard":
+    
+    st.title("Olá, Renan Ferreira do Nascimento 👋")
+    st.markdown("Bem-vindo ao seu **Dashboard de Vendas**.")
+    st.write("") 
+
+    if conexao_ok:
         if not df.empty:
-            # 1. LINHA DE MÉTRICAS (CARTÕES QUICKBOOKS)
+            # 1. LINHA DE MÉTRICAS (CARTÕES JODDA)
             total_faturado = df['Faturamento Bruto'].sum()
             total_lucro = df['Lucro Liquido'].sum()
+            ticket_medio = df['Faturamento Bruto'].mean()
             margem_percentual = (total_lucro / total_faturado) * 100 if total_faturado > 0 else 0
             
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Faturamento Bruto", formata_moeda(total_faturado))
-            c2.metric("Despesas e Custos", formata_moeda(total_faturado - total_lucro))
-            c3.metric("Lucro Líquido", formata_moeda(total_lucro))
-            c4.metric("Margem de Lucro", f"{margem_percentual:.1f}%")
+            c1.metric("Faturamento Total", formata_moeda(total_faturado))
+            c2.metric("Total de Pedidos", f"{len(df)}")
+            c3.metric("Ticket Médio", formata_moeda(ticket_medio))
+            c4.metric("Margem de Lucro Bruto", f"{margem_percentual:.1f}%")
             
-            st.write("")
-            st.write("")
-
-            # 2. GRÁFICO CLEAN (PADRÃO QUICKBOOKS)
-            st.subheader("Faturamento x Lucro (Diário)")
+            # 2. SEÇÃO DE ADS
+            st.write("### 📢 Investimento em Anúncios (ADS)")
+            ca1, ca2 = st.columns(2)
+            ca1.metric("Custo Total ADS (Mês)", "R$ 0,00") # Vamos puxar isso no futuro
+            ca2.metric("Lucro Líquido Pós ADS", formata_moeda(total_lucro))
+            
+            # 3. GRÁFICO (LINHAS E BARRAS LIMPAS TIPO JODDA)
+            st.write("---")
+            st.subheader("Faturamento x Lucro Diário")
             
             df_dia = df.groupby('Data').agg({'Faturamento Bruto': 'sum', 'Lucro Liquido': 'sum'}).reset_index()
             
             fig = go.Figure()
-            # Faturamento em barras cinza claro
-            fig.add_trace(go.Bar(x=df_dia['Data'], y=df_dia['Faturamento Bruto'], name='Faturamento', marker_color='#E3E5E8', marker_line_width=0))
-            # Lucro em linha Verde QuickBooks
-            fig.add_trace(go.Scatter(x=df_dia['Data'], y=df_dia['Lucro Liquido'], name='Lucro', mode='lines+markers', line=dict(color='#2CA01C', width=4), marker=dict(size=8, color='#2CA01C')))
+            # Faturamento em barras (Azul Jodda)
+            fig.add_trace(go.Bar(x=df_dia['Data'], y=df_dia['Faturamento Bruto'], name='Faturamento', marker_color='#e8efff', marker_line_width=0))
+            # Lucro em linha de destaque (Verde Jodda)
+            fig.add_trace(go.Scatter(x=df_dia['Data'], y=df_dia['Lucro Liquido'], name='Lucro Líquido', mode='lines+markers', line=dict(color='#83bf6e', width=4), marker=dict(size=8)))
             
-            # Fundo branco e limpo para o gráfico
             fig.update_layout(
-                plot_bgcolor='#FFFFFF',
-                paper_bgcolor='#FFFFFF',
+                plot_bgcolor='#ffffff',
+                paper_bgcolor='#ffffff',
                 hovermode="x unified",
-                font=dict(color='#393A3D'),
-                xaxis=dict(showgrid=False, linecolor='#E3E5E8'),
-                yaxis=dict(showgrid=True, gridcolor='#F4F5F8', linecolor='#E3E5E8'),
-                margin=dict(l=0, r=0, t=30, b=0),
+                xaxis=dict(showgrid=False),
+                yaxis=dict(showgrid=True, gridcolor='#efefef', gridwidth=1),
+                margin=dict(l=0, r=0, t=10, b=0),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
             st.plotly_chart(fig, use_container_width=True)
 
-            st.write("---")
-
-            # 3. TABELAS DE CONFERÊNCIA
-            c1, c2 = st.columns(2)
-            with c1:
-                with st.expander("Conferência do Fechamento Diário"):
-                    df_dia_tabela = df.groupby('Data').agg({'Faturamento Bruto': 'sum', 'Custos Venda (Produto+Taxa+Frete)': 'sum', 'Custo Fixo Rateado': 'sum', 'Lucro Liquido': 'sum'}).reset_index()
-                    df_dia_tabela['Data'] = df_dia_tabela['Data'].dt.strftime('%d/%m/%Y')
-                    for col in ['Faturamento Bruto', 'Custos Venda (Produto+Taxa+Frete)', 'Custo Fixo Rateado', 'Lucro Liquido']:
-                        df_dia_tabela[col] = df_dia_tabela[col].apply(formata_moeda)
-                    st.dataframe(df_dia_tabela, use_container_width=True, hide_index=True)
-            
-            with c2:
-                with st.expander("Lista Completa de Pedidos"):
-                    df_mostrar = df.copy()
-                    df_mostrar['Data'] = df_mostrar['Data'].dt.strftime('%d/%m/%Y')
-                    for col in cols_fin:
-                        if col in df_mostrar.columns:
-                            df_mostrar[col] = df_mostrar[col].apply(formata_moeda)
-                    st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
-                
         else:
-            st.warning("Nenhum dado financeiro encontrado ainda.")
+            st.warning("Nenhum dado encontrado no momento.")
+    else:
+        st.error(f"🔴 Erro de Conexão: {erro}")
 
-else:
-    st.error(f"🔴 Erro de Conexão: {erro}")
 
-with aba2:
-    st.info("O módulo de produção das costureiras ficará aqui.")
+# PÁGINA 2: GESTÃO DE PRODUTOS E CUSTOS (O QUE VOCÊ PEDIU AGORA!)
+elif menu_selecionado == "📦 Gestão de Produtos (Custos)":
+    st.title("📦 Gestão de Produtos e Custos")
+    st.markdown("Aqui você cadastra o Custo de Produção (Tecido, aviamentos, mão de obra) de cada produto para calcularmos o **Lucro Real**.")
+    
+    st.info("💡 Em breve: Nesta tela, o sistema vai ler os produtos vendidos na aba 'BD_Financeiro' e pedir para você preencher o custo de cada um deles. Quando você salvar, o aplicativo vai descontar esse custo automaticamente do Faturamento do Dashboard.")
+    
+    # Criando uma tabela falsa por enquanto só para você ver o visual
+    st.write("### Produtos com Custos a Definir")
+    
+    df_exemplo = pd.DataFrame({
+        "SKU": ["AMR-VEST-PRETO", "AMR-SAIA-CURTA", "AMR-BLUSA-TRICOT"],
+        "Produto": ["Vestido Longo Preto Amariti", "Saia Curta Amariti", "Blusa de Tricot Gola V"],
+        "Faturamento Bruto (Ref)": ["R$ 159,90", "R$ 89,90", "R$ 120,00"],
+        "Custo Cadastrado": ["❌ Sem Custo", "❌ Sem Custo", "❌ Sem Custo"]
+    })
+    
+    st.dataframe(df_exemplo, use_container_width=True, hide_index=True)
+    
+    st.button("Cadastrar Novo Custo de Produto", type="primary")
 
-with aba3:
-    st.info("Tela para configuração de Custos Fixos e Impostos.")
+
+# PÁGINA 3 E 4: PLACEHOLDERS
+elif menu_selecionado == "👗 Controle de Produção":
+    st.title("👗 Controle de Produção (PCP)")
+    st.markdown("Aqui será a tela da sua **Fábrica**.")
+    st.info("A costureira poderá clicar em um botão para dar baixa nas peças que ela costurou hoje, gerando um histórico de produtividade.")
+
+elif menu_selecionado == "⚙️ Configurações":
+    st.title("⚙️ Configurações")
+    st.markdown("Ajustes de Impostos, Custos Fixos Mensais (Aluguel, Luz, etc) e Conexões (Mercado Livre e Shopee).")
