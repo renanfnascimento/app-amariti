@@ -23,8 +23,11 @@ st.markdown("""
         --accent-red: #dc3545;
     }
     .stApp { background-color: var(--bg-light); }
+    
+    /* CORREÇÃO DO MENU LATERAL: Esconde só o inútil, mantém a setinha */
     #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
+    [data-testid="stHeaderActionElements"] {display: none;}
+    header {background: transparent !important;}
     
     /* Sidebar */
     [data-testid="stSidebar"] {
@@ -300,24 +303,11 @@ elif submenu == "📈 Margem de Contribuição":
         df_canais_view['Índice (%)'] = df_canais_view['Índice (%)'].apply(formata_perc)
         st.dataframe(df_canais_view, use_container_width=True, hide_index=True)
 
-        st.subheader("Produtos")
-        df_prods = df_merged.groupby('Produto_y').agg({'Numero_Pedido': 'nunique', 'Quantidade': 'sum', 'Faturamento_Item': 'sum', 'Custo_Total_Item': 'sum'}).reset_index()
-        df_prods['Margem'] = df_prods['Faturamento_Item'] - df_prods['Custo_Total_Item']
-        df_prods['Índice (%)'] = (df_prods['Margem'] / df_prods['Faturamento_Item']) * 100
-        
-        df_prods = df_prods.sort_values('Faturamento_Item', ascending=False)
-        df_prods_view = df_prods[['Produto_y', 'Numero_Pedido', 'Quantidade', 'Faturamento_Item', 'Índice (%)']].copy()
-        df_prods_view = df_prods_view.rename(columns={'Produto_y': 'Descrição', 'Numero_Pedido': 'Qtd. de vendas', 'Quantidade': 'Qtd. vendida', 'Faturamento_Item': 'Total faturado'})
-        df_prods_view['Total faturado'] = df_prods_view['Total faturado'].apply(formata_moeda)
-        df_prods_view['Índice (%)'] = df_prods_view['Índice (%)'].apply(formata_perc)
-        
-        st.dataframe(df_prods_view, use_container_width=True, hide_index=True)
-
         st.subheader("Pedidos de venda")
         df_pedidos = df_merged.groupby(['Numero_Pedido', 'Data']).agg({'Quantidade': 'sum', 'Faturamento_Item': 'sum', 'Custo_Total_Item': 'sum'}).reset_index()
         df_pedidos['Índice (%)'] = ((df_pedidos['Faturamento_Item'] - df_pedidos['Custo_Total_Item']) / df_pedidos['Faturamento_Item']) * 100
         df_pedidos = df_pedidos.sort_values('Data', ascending=False)
-        df_pedidos_view = df_pedidos[['Numero_Pedido', 'Data', 'Quantidade', 'Faturamento_Item', 'Índice (%)']].rename(columns={'Numero_Pedido': 'Nº Pedido', 'Quantidade': 'Qtd. de itens', 'Faturamento_Item': 'Total faturado'})
+        df_pedidos_view = df_pedidos[['Numero_Pedido', 'Data', 'Quantidade', 'Faturamento_Item', 'Índice (%)']].rename(columns={'Numero_Pedido': 'Nº Pedido', 'Quantidade': 'Qtd. itens', 'Faturamento_Item': 'Total faturado'})
         df_pedidos_view['Data'] = df_pedidos_view['Data'].dt.strftime('%d/%m/%Y')
         df_pedidos_view['Total faturado'] = df_pedidos_view['Total faturado'].apply(formata_moeda)
         df_pedidos_view['Índice (%)'] = df_pedidos_view['Índice (%)'].apply(formata_perc)
