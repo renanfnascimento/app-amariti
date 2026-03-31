@@ -8,7 +8,7 @@ import requests
 import datetime
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="ERP Amariti | Financeiro", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="ERP Amariti | Financeiro e PCP", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
 
 # --- CSS INSPIRADO NO TINY ERP E DRE ---
 st.markdown("""
@@ -141,9 +141,20 @@ def load_data():
         except Exception:
             df_itens = pd.DataFrame()
             
-        return df_fin, df_itens, True, ""
+        # PCP - Ficha Técnica
+        try:
+            aba_ficha = planilha.worksheet("Ficha_Tecnica")
+            df_ficha = pd.DataFrame(aba_ficha.get_all_records())
+            if not df_ficha.empty:
+                # Garante que a quantidade seja numero
+                if 'Quantidade' in df_ficha.columns:
+                    df_ficha['Quantidade'] = pd.to_numeric(df_ficha['Quantidade'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
+        except Exception:
+            df_ficha = pd.DataFrame()
+            
+        return df_fin, df_itens, df_ficha, True, ""
     except Exception as e:
-        return pd.DataFrame(), pd.DataFrame(), False, str(e)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), False, str(e)
 
 # --- 2. BUSCA DE DADOS (TINY ERP) ---
 @st.cache_data(ttl=300)
@@ -173,7 +184,7 @@ def load_tiny_produtos():
         return pd.DataFrame(), False, str(e)
 
 # Carregando Tudo
-df_fin_raw, df_itens_raw, conexao_ok, erro = load_data()
+df_fin_raw, df_itens_raw, df_ficha_raw, conexao_ok, erro = load_data()
 df_tiny, tiny_ok, erro_tiny = load_tiny_produtos()
 
 # --- SIDEBAR E FILTRO DE DATAS ---
@@ -218,6 +229,7 @@ with st.sidebar:
 # --- APLICANDO O FILTRO DE DATA ---
 df_fin = df_fin_raw.copy()
 df_itens = df_itens_raw.copy()
+df_ficha = df_ficha_raw.copy()
 
 if not df_fin.empty:
     mask_fin = (df_fin['Data'].dt.date >= data_inicio) & (df_fin['Data'].dt.date <= data_fim)
@@ -281,20 +293,17 @@ elif submenu == "📈 DRE e Margem de Contribuição":
     if not df_fin.empty and not df_merged.empty:
         # A MATEMÁTICA PERFEITA DA DRE
         receita_bruta = df_fin['Faturamento Bruto'].sum()
-        deducoes = 0 # Espaço para futuras devoluções/impostos diretos
+        deducoes = 0 
         receita_liquida = receita_bruta - deducoes
         
-        # Custos Variáveis
-        cmv_produtos = df_merged['Custo_Total_Item'].sum() # Custo cruzado do Tiny
+        cmv_produtos = df_merged['Custo_Total_Item'].sum()
         custos_venda_frete_comissao = df_fin['Custos Venda (Produto+Taxa+Frete)'].sum() 
         custo_ads = df_fin['Custo ADS'].sum() if 'Custo ADS' in df_fin.columns else 0
         total_custos_variaveis = cmv_produtos + custos_venda_frete_comissao + custo_ads
         
-        # Margem
         margem_contribuicao = receita_liquida - total_custos_variaveis
         indice_margem = (margem_contribuicao / receita_bruta * 100) if receita_bruta > 0 else 0
         
-        # Custos Fixos
         custos_fixos = df_fin['Custo Fixo Rateado'].sum()
         lucro_operacional = margem_contribuicao - custos_fixos
         indice_lucro = (lucro_operacional / receita_bruta * 100) if receita_bruta > 0 else 0
@@ -332,7 +341,6 @@ elif submenu == "📈 DRE e Margem de Contribuição":
         </div>
         """, unsafe_allow_html=True)
         
-        # CANAIS DE VENDA
         st.subheader("Canais de venda")
         df_canais_fin = df_fin.groupby('Canal').agg({'Faturamento Bruto': 'sum', 'Custos Venda (Produto+Taxa+Frete)': 'sum'}).reset_index()
         df_canais_itens = df_merged.groupby('Canal').agg({'Custo_Total_Item': 'sum'}).reset_index()
@@ -346,18 +354,6 @@ elif submenu == "📈 DRE e Margem de Contribuição":
         df_canais_view['Margem'] = df_canais_view['Margem'].apply(formata_moeda)
         df_canais_view['Índice (%)'] = df_canais_view['Índice (%)'].apply(formata_perc)
         st.dataframe(df_canais_view, use_container_width=True, hide_index=True)
-
-        # PEDIDOS
-        st.subheader("Pedidos de venda")
-        df_pedidos = df_merged.groupby(['Numero_Pedido', 'Data']).agg({'Quantidade': 'sum', 'Faturamento_Item': 'sum', 'Custo_Total_Item': 'sum'}).reset_index()
-        df_pedidos['Índice (%)'] = ((df_pedidos['Faturamento_Item'] - df_pedidos['Custo_Total_Item']) / df_pedidos['Faturamento_Item']) * 100
-        
-        df_pedidos = df_pedidos.sort_values('Data', ascending=False)
-        df_pedidos_view = df_pedidos[['Numero_Pedido', 'Data', 'Quantidade', 'Faturamento_Item', 'Índice (%)']].rename(columns={'Numero_Pedido': 'Nº Pedido', 'Quantidade': 'Qtd. itens', 'Faturamento_Item': 'Total faturado'})
-        df_pedidos_view['Data'] = df_pedidos_view['Data'].dt.strftime('%d/%m/%Y')
-        df_pedidos_view['Total faturado'] = df_pedidos_view['Total faturado'].apply(formata_moeda)
-        df_pedidos_view['Índice (%)'] = df_pedidos_view['Índice (%)'].apply(formata_perc)
-        st.dataframe(df_pedidos_view, use_container_width=True, hide_index=True)
 
     else:
         st.warning("Sem dados suficientes para processar a DRE no período selecionado.")
@@ -386,6 +382,63 @@ elif submenu == "🏆 Curva ABC (Lucro por Produto)":
         st.dataframe(df_abc_view, use_container_width=True, hide_index=True)
     else:
         st.warning("Sem dados de itens vendidos no período selecionado.")
+
+# -----------------------------------------
+# MÓDULO: SUPRIMENTOS -> PCP (NOVO!)
+# -----------------------------------------
+elif submenu == "👗 Controle de Produção (PCP)":
+    st.title("👗 Planejamento e Controle de Produção (PCP)")
+    st.markdown("Calcule a necessidade de insumos para suas próximas produções.")
+    
+    if not df_ficha.empty:
+        st.success("✅ Fichas Técnicas carregadas com sucesso da planilha!")
+        
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.subheader("1. Plano Mestre de Produção")
+            # Lista única de SKUs que tem ficha técnica cadastrada
+            skus_disponiveis = df_ficha['SKU_Produto'].unique()
+            sku_selecionado = st.selectbox("Selecione o Produto (SKU) que deseja produzir:", skus_disponiveis)
+            
+            # Pega o nome do produto selecionado para exibir bonitinho
+            nome_produto = df_ficha[df_ficha['SKU_Produto'] == sku_selecionado]['Nome_Produto'].iloc[0]
+            st.info(f"**Produto Selecionado:** {nome_produto}")
+            
+        with col2:
+            st.subheader("Meta")
+            qtd_produzir = st.number_input("Quantidade a Produzir (peças):", min_value=1, value=50, step=5)
+
+        st.markdown("---")
+        
+        # O botão mágico de cálculo (MRP)
+        if st.button("🚀 Calcular Necessidade de Materiais (Explosão)", type="primary"):
+            st.subheader("2. Lista de Compras / Separação (MRP)")
+            
+            # Filtra a ficha técnica só para o produto escolhido
+            df_mrp = df_ficha[df_ficha['SKU_Produto'] == sku_selecionado].copy()
+            
+            # A Matemática: Insumo Unitário X Quantidade que quero produzir
+            df_mrp['Necessidade Total'] = df_mrp['Quantidade'] * qtd_produzir
+            
+            # Organiza as colunas para ficar bonito na tela
+            df_mrp_view = df_mrp[['Insumo', 'Quantidade', 'Necessidade Total', 'Unidade']].rename(
+                columns={'Quantidade': 'Consumo por Peça'}
+            )
+            
+            # Mostra a tabela na tela
+            st.dataframe(df_mrp_view, use_container_width=True, hide_index=True)
+            
+            st.info("💡 Dica: Verifique no seu estoque físico se você tem o valor da coluna 'Necessidade Total' antes de iniciar a produção.")
+            
+    else:
+        st.error("⚠️ Não encontramos a aba **'Ficha_Tecnica'** na sua planilha (ou ela está vazia).")
+        st.markdown("""
+        **Como resolver:**
+        1. Abra sua planilha do Google.
+        2. Crie uma aba chamada exatamente `Ficha_Tecnica`.
+        3. Crie as colunas: `SKU_Produto`, `Nome_Produto`, `Insumo`, `Quantidade`, `Unidade`.
+        4. Cadastre a receita de pelo menos um produto e atualize esta página.
+        """)
 
 # -----------------------------------------
 # OUTROS MÓDULOS (Produtos / Configurações / etc)
